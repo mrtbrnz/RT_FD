@@ -3,6 +3,7 @@
 #import importlib
 import threading
 import serial
+import time
 
 import numpy as np
 import joblib
@@ -48,12 +49,6 @@ class SerialMessagesInterface(threading.Thread):
             self.ser.write(data)
             self.ser.flush()
 
-#    def collect_data(self,msg):
-#        if msg.name == 'IMU_GYRO_SCALED':
-#            print('GYRO received',msg.get_field(0), msg.get_field(1), msg.get_field(2) )
-#        if msg.name == 'IMU_ACCEL_SCALED':
-#            print('ACCEL received',msg.get_field(0), msg.get_field(1), msg.get_field(2) )
-
     def run(self):
         """Thread running function"""
         try:
@@ -82,15 +77,22 @@ class Model():
         self.fault_info  = 0
         self.fault_type = 0
         self.fault_class = 0
+        self.fault_state_increment = 0
 
     def set_interface(self,interface):
         self.interface = interface
 
     def predict(self,X):
-        #print('X in predict:',X, X.shape)
         X_scaled = self.scaler.transform(X.reshape(1,-1))
-        #print('X scaled:',X_scaled, X_scaled.shape)
         self.fault_info = self.model.predict(X_scaled)
+        self.update_fault_state()
+
+    def update_fault_state(self):
+        if self.fault_type != self.fault_info :
+            self.fault_state_increment += 1
+        else:
+            self.fault_state_increment = 0
+        if self.fault_state_increment >= 3 : self.fault_type = self.fault_info
         self.send_pprz_fault_info()
 
     def send_pprz_fault_info(self):
@@ -102,42 +104,59 @@ class Model():
         self.interface.send(set_fault, 0)
 
 
-
 class Data_Collector():
-    def __init__(self, model=None, dimension=6, history_step=2, verbose=False):
+    def __init__(self, model=None, dimension=8, history_step=2, verbose=False):
         self.verbose = verbose
         self.model = model
         self.history_step = history_step
         self.dimension=dimension
         self.data = np.zeros([self.dimension*self.history_step])
         self.X = np.zeros([self.dimension])
-        self.msg_received = np.zeros([2])
+        self.msg_received = np.zeros([3])
+        self.accel_msg_length = 3
+        self.gyro_msg_length = 3
+        self.commands_msg_length = 2
+        #self.last_time=time.time()
+        #self.last_gyro_time = time.time()
 
     def set_model(self, model):
         self.model = model
 
     def parse_msg(self, sender_id, msg):
         if msg.name == 'IMU_GYRO':
+            #print('Gyro time : ',time.time()-self.last_gyro_time)
+            #self.last_gyro_time = time.time()
             if self.verbose: print('GYRO received',msg.get_field(0), msg.get_field(1), msg.get_field(2) )
             self.set_gyro_data(msg)
         if msg.name == 'IMU_ACCEL':
             if self.verbose: print('ACCEL received',msg.get_field(0), msg.get_field(1), msg.get_field(2) )
             self.set_accel_data(msg)
+        if msg.name == 'COMMANDS':
+            if self.verbose: print('COMMANDS received',msg._fieldvalues[0] )
+            self.set_commands_data(msg)
 
     def set_accel_data(self,msg):
         n = int(self.msg_received[0]*self.dimension)
-        nn = int(n + self.dimension/2)
+        nn = int(n + self.accel_msg_length)
         #print('accel:',n,nn)
         self.data[n:nn] = msg.get_field(0), msg.get_field(1), msg.get_field(2) 
         self.msg_received[0] += 1
         self.check_data_ready()
 
     def set_gyro_data(self,msg):
-        n = int(self.msg_received[0]*self.dimension + self.dimension/2)
-        nn = int(n + self.dimension/2)
+        n = int(self.msg_received[1]*self.dimension + self.accel_msg_length)
+        nn = int(n + self.gyro_msg_length)
         #print('gyro:',n,nn)
         self.data[n:nn] = msg.get_field(0), msg.get_field(1), msg.get_field(2) 
         self.msg_received[1] += 1
+        self.check_data_ready()
+
+    def set_commands_data(self,msg):
+        n = int(self.msg_received[2]*self.dimension + self.gyro_msg_length)
+        nn = int(n + self.commands_msg_length)
+        #print('gyro:',n,nn)
+        self.data[n:nn] = msg._fieldvalues[0][1:3]
+        self.msg_received[2] += 1
         self.check_data_ready()
 
     def reset_msg(self):
@@ -145,44 +164,27 @@ class Data_Collector():
 
     def send_data_to_model(self,X):
         if self.model != None :
+            #print('Prediction time : ',time.time()-self.last_time)
+            #self.last_time = time.time()
             self.model.predict(X)
+            #pass
         else:
             print('No prediction model assigned !')
             pass
 
     def check_data_ready(self):
-        if (self.msg_received[0]>=self.history_step) & (self.msg_received[1]>=self.history_step):
+        if (self.msg_received[0]>=self.history_step) & (self.msg_received[1]>=self.history_step) & (self.msg_received[2]>=self.history_step):
             self.X = self.data.copy()
             self.send_data_to_model(self.X)
             self.reset_msg()
             if self.verbose: print('X :',self.X)
             
 
-def svm_callback(s,msg):
-    pass
-    # print("Here we are finally !")
-    # try:
-    # if msg.name == 'PPRZ_MODE':
-    #     print(msg['ap_mode'])
-    # print(msg.name)
-    #if msg.name == 'IMU_GYRO_SCALED':
-    #    print(msg.get_field(0), msg.get_field(1), msg.get_field(2) )#msg)
-        # print(msg.get_field(1), msg.gq)
-    # except:
-    #     pass
-
-#telemetry.PPRZ_MODE {ap_mode : 2, ap_gaz : 0, ap_lateral : 0, ap_horizontal : 0, if_calib_mode : 0, mcu1_status : 6, }
-#telemetry.IMU_GYRO {gp : 0.00634765625, gq : -0.02392578125, gr : -0.00634765625, }
-#telemetry.IMU_ACCEL {ax : 0.001953125, ay : -0.2919921875, az : -9.634765625, }
-
 
 def main():
     '''
-    run test program as a module to avoid namespace conflicts with serial module:
-    
-    python -m pprzlink.serial
+    Real-time Fault prediction module:
 
-    pprzlink should be installed in a python standard path or included to your PYTHONPATH
     '''
     import time
     import argparse
@@ -193,7 +195,7 @@ def main():
     parser.add_argument("-f", "--file", help="path to messages.xml file", default='pprzlink/messages.xml')
     parser.add_argument("-c", "--class", help="message class", dest='msg_class', default='telemetry')
     parser.add_argument("-d", "--device", help="device name", dest='dev', default='/dev/serial0')
-    parser.add_argument("-b", "--baudrate", help="baudrate", dest='baud', default=115200, type=int)
+    parser.add_argument("-b", "--baudrate", help="baudrate", dest='baud', default=230400, type=int)
     parser.add_argument("-id", "--ac_id", help="aircraft id (receiver)", dest='ac_id', default=42, type=int)
     parser.add_argument("--interface_id", help="interface id (sender)", dest='id', default=0, type=int)
     args = parser.parse_args()
@@ -201,11 +203,15 @@ def main():
 
     #model_filename = 'svm_model_1.joblib'
     #scaler_filename = 'svm_scaler_1.joblib'
-    model_filename = 'models/svm_model_binary_r05.joblib'
-    scaler_filename = 'models/svm_scaler_binary_r05.joblib'
+
+    #model_filename = 'models/svm_model_binary_r05.joblib'
+    #scaler_filename = 'models/svm_scaler_binary_r05.joblib'
+
+    model_filename = 'models/svm_model_binary_r05_07072020_AGC_20h_10s.joblib'
+    scaler_filename = 'models/svm_scaler_binary_r05_07072020_AGC_20h_10s.joblib'
 
     model = Model(model_filename, scaler_filename)
-    collector = Data_Collector(model=model, dimension=6, history_step=10, verbose=False)
+    collector = Data_Collector(model=model, dimension=8, history_step=20, verbose=False)
     serial_interface = SerialMessagesInterface(collector.parse_msg, device=args.dev,
                                                baudrate=args.baud, msg_class=args.msg_class, interface_id=args.id, verbose=False)
     model.set_interface(serial_interface)
@@ -216,32 +222,6 @@ def main():
 
         # give the thread some time to properly start
         time.sleep(0.1)
-
-        # send some datalink messages to aicraft for test
-        #ac_id = args.ac_id
-        #print("sending ping")
-        #ping = PprzMessage('datalink', 'PING')
-        #serial_interface.send(ping, 0)
-
-        #get_setting = PprzMessage('datalink', 'GET_SETTING')
-        #get_setting['index'] = 0
-        #get_setting['ac_id'] = ac_id
-        #serial_interface.send(get_setting, 0)
-
-        # change setting with index 0 (usually the telemetry mode)
-        #print('Sending the FAULT_INFO')
-        #set_fault = PprzMessage('datalink', 'FAULT_INFO')
-        #set_fault['info'] = 2
-        #set_fault['type'] = 1
-        #set_fault['class'] = 1
-        #serial_interface.send(set_fault, 0)
-
-        # block = PprzMessage('datalink', 'BLOCK')
-        # block['block_id'] = 3
-        # block['ac_id'] = ac_id
-        # serial_interface.send(block, 0)
-
-
 
         while serial_interface.isAlive():
             serial_interface.join(1)
