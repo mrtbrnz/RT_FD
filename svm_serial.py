@@ -1,4 +1,4 @@
-# !/usr/bin//python3
+#!/usr/bin/env python3
 #from __future__ import absolute_import, division, print_function
 #import importlib
 import threading
@@ -73,6 +73,7 @@ class Model():
         self.model = joblib.load(saved_model_filename) # model can be saved with joblib.dump(clf,'fname.joblib')
         self.scaler = joblib.load(saved_scaler_filename)
         self.interface = None
+        self.logger = None
         self.verbose = verbose
         self.fault_info  = 0
         self.fault_type = 0
@@ -82,8 +83,14 @@ class Model():
     def set_interface(self,interface):
         self.interface = interface
 
+    def set_logger(self, logger):
+        self.logger = logger
+
     def predict(self,X):
+        self.logger.write_log(X)
         X_scaled = self.scaler.transform(X.reshape(1,-1))
+        #self.logger.write_log(X_scaled)
+        #print('X_scaled shpae : ',X_scaled.shape)
         self.fault_info = self.model.predict(X_scaled)
         self.update_fault_state()
 
@@ -102,6 +109,21 @@ class Model():
         set_fault['type'] = self.fault_type
         set_fault['class']= self.fault_class
         self.interface.send(set_fault, 0)
+
+class Logger():
+    def __init__(self,filename='log.txt'):
+        self.filename = filename
+        self.log = np.zeros((8000, 161))
+        self.line = 0
+
+    def write_log(self, X):
+        self.log[self.line,0] = time.time()
+        self.log[self.line,1:]=X
+        self.line += 1
+
+    def close_log(self):
+        with open(self.filename, 'wb') as f:
+            np.save(f,self.log[:self.line])
 
 
 class Data_Collector():
@@ -147,15 +169,19 @@ class Data_Collector():
         n = int(self.msg_received[1]*self.dimension + self.accel_msg_length)
         nn = int(n + self.gyro_msg_length)
         #print('gyro:',n,nn)
+        #if msg.get_field(0) == 0: print('Zero Value in Gyro X')
+        #if msg.get_field(1) == 0: print('Zero Value in Gyro Y')
+        #if msg.get_field(2) == 0: print('Zero Value in Gyro Z')
         self.data[n:nn] = msg.get_field(0), msg.get_field(1), msg.get_field(2) 
         self.msg_received[1] += 1
         self.check_data_ready()
 
     def set_commands_data(self,msg):
-        n = int(self.msg_received[2]*self.dimension + self.gyro_msg_length)
+        n = int(self.msg_received[2]*self.dimension + self.accel_msg_length + self.gyro_msg_length)
         nn = int(n + self.commands_msg_length)
-        #print('gyro:',n,nn)
-        self.data[n:nn] = msg._fieldvalues[0][1:3]
+        #print('commands :',n,nn)
+        #print('Commands converted : ', msg._fieldvalues[0][1:3])
+        self.data[n:nn] = msg._fieldvalues[0][1:3] # get only the right and left ailevon commands
         self.msg_received[2] += 1
         self.check_data_ready()
 
@@ -214,10 +240,13 @@ def main():
     scaler_filename = 'models/svm_scaler_binary_r03_10072020_AGC_20h_10s.joblib'
 
     model = Model(model_filename, scaler_filename)
+    #collector = Data_Collector(model=model, dimension=8, history_step=20, verbose=True)
     collector = Data_Collector(model=model, dimension=8, history_step=20, verbose=False)
     serial_interface = SerialMessagesInterface(collector.parse_msg, device=args.dev,
                                                baudrate=args.baud, msg_class=args.msg_class, interface_id=args.id, verbose=False)
+    logger = Logger()
     model.set_interface(serial_interface)
+    model.set_logger(logger)
 
     print("Starting serial interface on %s at %i baud" % (args.dev, args.baud))
     try:
@@ -230,6 +259,7 @@ def main():
             serial_interface.join(1)
     except (KeyboardInterrupt, SystemExit):
         print('Shutting down...')
+        logger.close_log()
         serial_interface.stop()
         exit()
 
