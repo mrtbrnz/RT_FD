@@ -236,8 +236,14 @@ def main():
     #model_filename = 'models/svm_model_binary_r05_07072020_AGC_20h_10s.joblib'
     #scaler_filename = 'models/svm_scaler_binary_r05_07072020_AGC_20h_10s.joblib'
 
-    model_filename = 'models/svm_model_binary_r03_10072020_AGC_20h_10s.joblib'
-    scaler_filename = 'models/svm_scaler_binary_r03_10072020_AGC_20h_10s.joblib'
+    #model_filename = 'models/svm_model_binary_r03_10072020_AGC_20h_10s.joblib'
+    #scaler_filename = 'models/svm_scaler_binary_r03_10072020_AGC_20h_10s.joblib'
+
+    #model_filename = 'models/svm_model_binary_r03_l03_13072020_AGC_20h_10s.joblib'
+    #scaler_filename = 'models/svm_scaler_binary_r03_l03_13072020_AGC_20h_10s.joblib'
+
+    model_filename = 'models/svm_model_binary_multi_21072020_AGC_20h_10s.joblib'
+    scaler_filename = 'models/svm_scaler_binary_multi_21072020_AGC_20h_10s.joblib'
 
     model = Model(model_filename, scaler_filename)
     #collector = Data_Collector(model=model, dimension=8, history_step=20, verbose=True)
